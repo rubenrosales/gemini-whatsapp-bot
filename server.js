@@ -1,12 +1,5 @@
-/**
- * Copyright (c) Meta Platforms, Inc. and affiliates.
- *
- * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree.
- */
-
 import express from "express";
-import fetch from 'node-fetch'; // Import node-fetch
+import fetch from 'node-fetch';
 
 const app = express();
 app.use(express.json());
@@ -14,380 +7,393 @@ app.use(express.json());
 const { WEBHOOK_VERIFY_TOKEN, GRAPH_API_TOKEN, GEMINI_API_KEY } = process.env;
 const PORT = 3000;
 
-const DICTIONARY_API_BASE_URL = "https://dictionary.kubishi.com";
 
-async function translateToPaiute(englishWord) {
+async function callGeminiAPI(prompt, systemPrompt = "") {
     try {
-        const url = `${DICTIONARY_API_BASE_URL}/api/search/paiute?query=${encodeURIComponent(englishWord)}`;
-        const response = await fetch(url);
-
-        if (!response.ok) {
-            console.error(`Dictionary API error: ${response.status} ${response.statusText}`);
-            return null;
-        }
-
-        const data = await response.json();
-
-        if (Array.isArray(data) && data.length > 0) {
-            return data; // Return the array of translations.
-        } else {
-            return null; // No translation found
-        }
-
-    } catch (error) {
-        console.error("Error during dictionary API call:", error);
-        return null;
-    }
-}
-
-async function getWordDetails(wordId) {
-    try {
-        const url = `${DICTIONARY_API_BASE_URL}/api/word/${wordId}`;
-        const response = await fetch(url);
-
-        if (!response.ok) {
-            console.error(`Dictionary API error: ${response.status} ${response.statusText}`);
-            return null;
-        }
-
-        const data = await response.json();
-        return data;
-
-    } catch (error) {
-        console.error("Error during dictionary API call:", error);
-        return null;
-    }
-}
-
-async function searchEnglishWords(query) {
-    try {
-        const url = `${DICTIONARY_API_BASE_URL}/api/search/english?query=${encodeURIComponent(query)}`;
-        const response = await fetch(url);
-
-        if (!response.ok) {
-            console.error(`Dictionary API error: ${response.status} ${response.statusText}`);
-            return null;
-        }
-
-        const data = await response.json();
-        return data;
-
-    } catch (error) {
-        console.error("Error during dictionary API call:", error);
-        return null;
-    }
-}
-
-async function searchSentences(query) {
-     try {
-        const url = `${DICTIONARY_API_BASE_URL}/api/search/sentence?query=${encodeURIComponent(query)}`;
-        const response = await fetch(url);
-
-        if (!response.ok) {
-            console.error(`Dictionary API error: ${response.status} ${response.statusText}`);
-            return null;
-        }
-
-        const data = await response.json();
-        return data;
-
-    } catch (error) {
-        console.error("Error during dictionary API call:", error);
-        return null;
-    }
-}
-
-async function generateContent(prompt, useTools = true) {
-    try {
-        console.log("Prompt:", prompt);
-
         const geminiApiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
-        const tools = [
-            {
-                "function_declarations": [
+
+        const tools = {
+            "tools": [
+                {
+                    "function_declarations": [
+                        {
+                            "name": "getWordById",
+                            "description": "Retrieve details of a specific word.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "word_id": {
+                                        "type": "string",
+                                        "description": "The ID of the word to retrieve."
+                                    }
+                                },
+                                "required": [
+                                    "word_id"
+                                ]
+                            }
+                        },
+                        {
+                            "name": "searchEnglish",
+                            "description": "Search for English words.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Search query for English words."
+                                    }
+                                },
+                                "required": [
+                                    "query"
+                                ]
+                            }
+                        },
+                        {
+                            "name": "searchPaiute",
+                            "description": "Search for Paiute words.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Search query for Paiute words."
+                                    }
+                                },
+                                "required": [
+                                    "query"
+                                ]
+                            }
+                        },
+                        {
+                            "name": "searchSentence",
+                            "description": "Search for sentences.",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {
+                                    "query": {
+                                        "type": "string",
+                                        "description": "Search query for sentences."
+                                    }
+                                },
+                                "required": [
+                                    "query"
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        };
+        let contents = [{ parts: [{ text: prompt }] }];
+        let requestBody = {
+            contents: contents,
+            tools: tools.tools
+        };
+
+        const _systemPrompt = `You are an autonomous language assistant specializing in English and Paiute. Your primary function is to use available tools, specifically functions that interface with the Kubishi Dictionary API, to assist users with language-related tasks for both languages.User inputs may be vague try to use function calls as much as you can to help them out.
+Dont forget that inputs do not have be exact, so think of these tools also as a fuzzy searcher. Eg. "how do you say im going to the store with my dog?" should search the searchSentence endpoint.
+**You have access to the following functions (tools) to interact with the Kubishi Dictionary API:**
+
+- **getWordById(word_id: string)**: Retrieves details of a specific word given its ID.
+- **searchEnglish(query: string)**: Searches for English words matching the query.
+- **searchPaiute(query: string)**: Searches for Paiute words matching the query.
+- **searchSentence(query: string)**: Searches for sentences matching the query.
+
+When the user asks a question related to English or Paiute language, determine if one of these functions can help answer the question. If so, use the function call in your response.  If you can answer directly without using tools, you can also do that.`;
+
+
+        if (_systemPrompt) {
+            requestBody["systemInstruction"] = {
+                "parts": [
                     {
-                        "name": "translateToPaiute",
-                        "description": "Use this function to translate English words to Paiute. It is critical for fulfilling translation requests. The input should ONLY be the exact English word to translate; nothing else. If the prompt contains multiple words, call this function multiple times.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "englishWord": {
-                                    "type": "string",
-                                    "description": "The English word to translate to Paiute. The value should be a SINGLE word only. For example: dog, cat, house.",
-                                }
-                            },
-                            "required": ["englishWord"]
-                        }
-                    },
-                    {
-                        "name": "getWordDetails",
-                        "description": "Use this function to retrieve detailed information about a specific word using its ID.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "wordId": {
-                                    "type": "string",
-                                    "description": "The ID of the word to retrieve details for.",
-                                }
-                            },
-                            "required": ["wordId"]
-                        }
-                    },
-                     {
-                        "name": "searchEnglishWords",
-                        "description": "Use this function to search for English words. It takes a query string as input.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The search query to find English words.",
-                                }
-                            },
-                            "required": ["query"]
-                        }
-                    },
-                    {
-                        "name": "searchSentences",
-                        "description": "Use this function to search for sentences that are relevant to the query.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "query": {
-                                    "type": "string",
-                                    "description": "The search query to find sentences.",
-                                }
-                            },
-                            "required": ["query"]
-                        }
+                        "text": _systemPrompt
                     }
                 ]
             }
-        ];
-
-        const requestBody = {
-            contents: [{ parts: [{ text: prompt }] }],
-            tools: useTools ? tools : [], // Conditionally include tools
-        };
+        }
 
 
+        // console.log("Gemini Request Body:", JSON.stringify(requestBody, null, 2));
 
         const response = await fetch(geminiApiUrl, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(requestBody),
         });
 
         if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
+            throw new Error(`Gemini API error: ${response.status} ${response.statusText}`);
         }
 
         const data = await response.json();
-        console.log("Gemini API Response:", data);
+        // console.log("Gemini API Response:", JSON.stringify(data, null, 2));
+        return data;
 
-        let responseMessage = "Sorry, I couldn't extract a response from the Gemini API."; // Default message
+    } catch (error) {
+        console.error("Error calling Gemini API:", error);
+        return null;
+    }
+}
 
-        if (data && data.candidates && data.candidates.length > 0) {
-            const candidate = data.candidates[0];
-            console.log(candidate.content)
-            if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0 &&  candidate.content.parts[0].text ) {
-                responseMessage = candidate.content.parts[0].text; // Text response
-                console.log("getting responseMessage")
+async function getWordById(word_id) {
+    const baseUrl = "https://dictionary.kubishi.com";
+    const endpoint = `/api/word/${word_id}`;
+    const url = baseUrl + endpoint;
+
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            if (response.status === 404) {
+                return { error: "Word not found" };
             }
+            throw new Error(`API error: ${response.status} ${response.statusText}`);
+        }
+        const data = await response.json();
+        // Only return the relevant data, according to the API spec
+        return {
+            lexical_unit: data.lexical_unit,
+            definition: data.definition,
+            id: data.id
+        };
+    } catch (error) {
+        console.error(`Error in getWordById:`, error);
+        return { error: "Failed to retrieve word details" };
+    }
+}
 
-             if (candidate.content && candidate.content.parts && candidate.content.parts.length > 0 && candidate.content.parts[0].functionCall) {
-                const functionCall = candidate.content.parts[0].functionCall;
-                 console.log("Function call detected:", functionCall);
-                const functionName = functionCall.name;
+async function searchEnglish(query) {
+    return await searchWords("english", query);
+}
 
-                try {
-                    const functionArgs = functionCall.args;
+async function searchPaiute(query) {
+    return await searchWords("paiute", query);
+}
 
-                    if (functionName === "translateToPaiute") {
-                        const paiuteTranslations = await translateToPaiute(functionArgs.englishWord);
+async function searchSentence(query) {
+    return await searchWords("sentence", query);
+}
 
-                        if (paiuteTranslations) {
-                            let paiuteResponse = `Paiute translations for "${functionArgs.englishWord}":\n\n`;
+async function searchWords(language, query) {
+    const baseUrl = "https://dictionary.kubishi.com";
+    const endpoint = `/api/search/${language}?query=${encodeURIComponent(query)}`;
+    const url = baseUrl + endpoint;
 
-                            paiuteTranslations.forEach((result, index) => {
-                                paiuteResponse += `**Entry ${index + 1}:**\n`;
-                                paiuteResponse += `Lexical Unit: ${result.lexical_unit}\n`;
-
-                                if (result.senses && Array.isArray(result.senses) && result.senses.length > 0) {
-                                    result.senses.forEach(sense => {
-                                        paiuteResponse += `  Definition: ${sense.definition}\n`;
-                                        paiuteResponse += `  Gloss: ${sense.gloss}\n`;
-                                        paiuteResponse += `  Grammatical Info: ${sense.grammatical_info}\n`;
-
-                                        if (sense.examples && Array.isArray(sense.examples) && sense.examples.length > 0) {
-                                            paiuteResponse += "  Examples:\n";
-                                            sense.examples.forEach(example => {
-                                                paiuteResponse += `    Form: ${example.form}\n`;
-                                                paiuteResponse += `    Translation: ${example.translation}\n`;
-                                            });
-                                        } else {
-                                            paiuteResponse += "  No examples provided.\n";
-                                        }
-                                        paiuteResponse += "\n";
-                                    });
-                                } else {
-                                    paiuteResponse += "  No senses (definitions) found for this entry.\n";
-                                }
-                                paiuteResponse += "---\n";
-                            });
-
-                            paiuteResponse = paiuteResponse.slice(0, -5);
-                            responseMessage = paiuteResponse; // Override default message
-                        } else {
-                            responseMessage = `Could not find a Paiute translation for "${functionArgs.englishWord}".`; // Override default message
-                        }
-                    } else if (functionName === "getWordDetails") {
-                        const wordDetails = await getWordDetails(functionArgs.wordId);
-
-                        if (wordDetails) {
-                            responseMessage = `Word Details for ID "${functionArgs.wordId}":\n\n`;
-                            responseMessage += `Lexical Unit: ${wordDetails.lexical_unit || 'N/A'}\n`;
-                            responseMessage += `Definition: ${wordDetails.definition || 'N/A'}\n`;
-                        } else {
-                            responseMessage = `Could not find word details for ID "${functionArgs.wordId}".`;
-                        }
-                    }  else if (functionName === "searchEnglishWords") {
-                        const searchResults = await searchEnglishWords(functionArgs.query);
-
-                        if (searchResults && Array.isArray(searchResults) && searchResults.length > 0) {
-                            responseMessage = `Search results for English word "${functionArgs.query}":\n\n`;
-
-                            for (const result of searchResults) {
-                                responseMessage += `**Lexical Unit:** ${result.lexical_unit}\n`;
-                                if (result.senses && Array.isArray(result.senses) && result.senses.length > 0) {
-                                    for (const sense of result.senses) {
-                                        responseMessage += `  **Definition:** ${sense.definition}\n`;
-                                        responseMessage += `  **Gloss:** ${sense.gloss}\n`;
-                                        responseMessage += `  **Grammatical Info:** ${sense.grammatical_info}\n`;
-
-                                        if (sense.examples && Array.isArray(sense.examples) && sense.examples.length > 0) {
-                                            responseMessage += `  **Examples:**\n`;
-                                            for (const example of sense.examples) {
-                                                responseMessage += `    Form: ${example.form}\n`;
-                                                responseMessage += `    Translation: ${example.translation}\n`;
-                                            }
-                                        } else {
-                                            responseMessage += `  No examples provided.\n`;
-                                        }
-                                    }
-                                } else {
-                                    responseMessage += `  No senses found for this entry.\n`;
-                                }
-                                responseMessage += `---\n`;
-                            }
-                            responseMessage = responseMessage.slice(0, -5); // Remove last '---'
-                        } else {
-                            responseMessage = `Could not find English words for query "${functionArgs.query}".`;
-                        }
-                    } else if (functionName === "searchSentences") {
-                         const searchResults = await searchSentences(functionArgs.query);
-
-                         if (searchResults && Array.isArray(searchResults) && searchResults.length > 0) {
-                            responseMessage = `Search results for sentences "${functionArgs.query}":\n\n`;
-
-                            for (const result of searchResults) {
-                                responseMessage += `**Sentence:** ${result.sentence}\n`;
-                                responseMessage += `**Translation:** ${result.translation}\n`;
-                                responseMessage += `---\n`;
-                            }
-                             responseMessage = responseMessage.slice(0, -5); // Remove last '---'
-                        } else {
-                            responseMessage = `Could not find sentences for query "${functionArgs.query}".`;
-                        }
-                    }
-                     else {
-                        responseMessage = "Sorry, I don't know how to handle that function.";  // Override default message
-                    }
-                } catch (e) {
-                    console.error("Error parsing function arguments", functionCall.parameters, e);
-                    responseMessage = `Error processing arguments for function ${functionName}`; // Override default message
-                }
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            if (response.status === 400) {
+                return "Please provide a word to search for."; // User-friendly 400 error
             }
-        } else {
-            console.warn("Unexpected Gemini API response format:", data);
+            throw new Error(`API error: ${response.status} ${response.statusText}`);
+        }
+        const data = await response.json();
+
+        if (!data || data.length === 0) {
+            return `I couldn't find any results for "${query}" in ${language}.`;
         }
 
-        return responseMessage; // Return the determined response
+        let formattedResponse = `Here are the results for "${query}":\n\n`;
+
+        if (language == "sentence"){
+        data.forEach((entry, index) => {
+            formattedResponse += `**${index + 1}. ${entry.sentence}***\n`;
+
+            // if (entry.traits && entry.traits['morph-type']) {
+            //     formattedResponse += ` *(${entry.traits['morph-type']})*\n`;
+            // } else {
+            //     formattedResponse += "\n";
+            // }
+          console.log(entry)
+          console.log("________")
+          
+                    const translation = entry.translation
+                    if(translation){
+                        formattedResponse += `   - Translation: ${translation}\n`;
+
+                    }
+                    const notes = entry.notes 
+                    if (notes)
+                    {
+                        formattedResponse += `   - Notes: ${notes}\n`;
+
+                    }
+            if (entry.senses && entry.senses.length > 0) {
+                entry.senses.forEach((sense, senseIndex) => {
+                    // Handle both array and object formats for senses.  Crucial!
+//                     const sentence = sense.sentence || (sense[0] && sense[0].sentence);
+//                     if (sentence) {
+//                          formattedResponse += `   - Sentence: ${sentence}\n`;
+//                     }
+                  
+                    const translation = sense.translation || (sense[0] && sense[0].translation);
+                    if(translation){
+                        formattedResponse += `   - Translation: ${translation}\n`;
+
+                    }
+                    const notes = sense.notes || (sense[0] && sense[0].notes);
+                    if (notes)
+                    {
+                        formattedResponse += `   - Notes: ${notes}\n`;
+
+                    }
+
+
+
+                });
+            }
+
+
+            formattedResponse += "\n";
+        });
+
+        }
+      
+      else{
+        
+                data.forEach((entry, index) => {
+            formattedResponse += `**${index + 1}. ${entry.lexical_unit}**`;
+
+            if (entry.traits && entry.traits['morph-type']) {
+                formattedResponse += ` *(${entry.traits['morph-type']})*\n`;
+            } else {
+                formattedResponse += "\n";
+            }
+
+            if (entry.senses && entry.senses.length > 0) {
+                entry.senses.forEach((sense, senseIndex) => {
+                    // Handle both array and object formats for senses.  Crucial!
+                    const definition = sense.definition || (sense[0] && sense[0].definition);
+                    if (definition) {
+                         formattedResponse += `   - Definition: ${definition}\n`;
+                    }
+                  
+                    const gloss = sense.gloss || (sense[0] && sense[0].gloss);
+                    if(gloss){
+                        formattedResponse += `   - Gloss: ${gloss}\n`;
+
+                    }
+                    const examples = sense.examples || (sense[0] && sense[0].examples);
+                    if (examples && Array.isArray(examples))
+                    {
+                        examples.forEach((example,exindex) =>
+                        {
+                            formattedResponse += `   - Example ${exindex+1}: ${example.form}\n`;
+                            if(example.translation)
+                            {
+                                formattedResponse += `       Translation: ${example.translation}\n`;
+                            }
+
+
+                        });
+                    }
+
+
+
+                });
+            }
+
+
+            formattedResponse += "\n";
+        });
+
+
+        
+      }
+
+        return formattedResponse;
+
+
     } catch (error) {
-        console.error("Error generating content:", error);
-        return "Sorry, I encountered an error while processing your request.";
+        console.error(`Error in search${language.charAt(0).toUpperCase() + language.slice(1)}:`, error);
+        return `Sorry, I encountered an error while searching for "${query}" in ${language}.`; // User-friendly error
     }
 }
 
-async function translateSentenceUsingTools(sentence) {
-    const words = sentence.split(/\s+/); // Split the sentence into words
-    let translatedSentence = "";
+async function executeFunctionCall(functionCall) {
+    const { name, args } = functionCall;
 
-    for (const word of words) {
-        // Generate content using Gemini API with tool use *for each word*
-        const geminiResponse = await generateContent(`Translate "${word}" to Paiute.`, true);  // Ensure tool use
+    switch (name) {
+        case 'getWordById':
+            return await getWordById(args.word_id);
+        case 'searchEnglish':
+            return await searchEnglish(args.query);
+        case 'searchPaiute':
+            return await searchPaiute(args.query);
+        case 'searchSentence':
+            return await searchSentence(args.query);
+        default:
+            return { error: `Unknown function: ${name}` };
+    }
+}
 
-        translatedSentence += geminiResponse + " "; // Append translated word + space
+
+async function processGeminiResponse(data) {
+    if (!data || !data.candidates || data.candidates.length === 0) {
+        console.warn("No candidates in Gemini API response.");
+        return "Sorry, I couldn't get a valid response.";
     }
 
-    return translatedSentence.trim(); // Return the combined translated sentence
+    const candidate = data.candidates[0];
+    const content = candidate.content;
+
+    if (!content || !content.parts || content.parts.length === 0) {
+        console.warn("No content parts in Gemini API response.");
+        return "Sorry, the response was empty.";
+    }
+
+    for (const part of content.parts) {
+        if (part.functionCall) {
+            const functionCall = part.functionCall;
+            console.log("Function call detected:", functionCall);
+            const functionResult = await executeFunctionCall(functionCall);
+            return functionResult; // Return the result of the function call
+        } else if (part.text) {
+            return part.text; // Direct text response
+        }
+    }
+
+    console.warn("Unexpected Gemini API response format:", data);
+    return "Sorry, I couldn't understand the response.";
 }
 
-async function searchSentencesUsingTool(query) {
 
-    // Generate content using Gemini API with tool use, forcing "searchSentences"
-    const geminiResponse = await generateContent(query, true);
+// --- Message Handling ---
+async function handleUserMessage(userMessage, systemPrompt = "") {
+    const geminiData = await callGeminiAPI(userMessage, systemPrompt);
+    if (!geminiData) return "Sorry, I couldn't process your request.";
 
-    return geminiResponse; // Return the combined translated sentence
+    return await processGeminiResponse(geminiData);
 }
 
+// --- Express Routes ---
 app.post("/webhook", async (req, res) => {
-    // log incoming messages
     console.log("Incoming webhook message:", JSON.stringify(req.body, null, 2));
 
-    // check if the webhook request contains a message
     const message = req.body.entry?.[0]?.changes[0]?.value?.messages?.[0];
 
-    // check if the incoming message contains text
     if (message?.type === "text") {
-        // extract the business number to send the reply from it
-        const business_phone_number_id =
-            req.body.entry?.[0].changes?.[0].value?.metadata?.phone_number_id;
-
+        const business_phone_number_id = req.body.entry?.[0].changes?.[0].value?.metadata?.phone_number_id;
         const userMessage = message.text.body;
 
-        let messageBody = "";
+        // Add your system prompt here if you like, it will apply to all messages
+        const systemPrompt = "You are a helpful assistant.";
 
-        if (userMessage.startsWith("/translate")) {
-            // Extract the sentence to translate
-            const sentenceToTranslate = userMessage.substring("/translate".length).trim();
+        let response = await handleUserMessage(userMessage, systemPrompt);
+        let responseMessage = "";
 
-            if (sentenceToTranslate) {
-                // Translate the sentence to Paiute using tools
-                messageBody = await translateSentenceUsingTools(sentenceToTranslate);
-            } else {
-                messageBody = "Please provide a sentence to translate after the /translate command.";
-            }
-        } else if (userMessage.startsWith("/sentences")) {
-            const sentenceQuery = userMessage.substring("/sentences".length).trim();
-
-            if (sentenceQuery) {
-                messageBody = await searchSentencesUsingTool(sentenceQuery);
-            } else {
-                messageBody = "Please provide a query to search for sentences after the /sentences command.";
-            }
+        if (typeof response === 'string') {
+            responseMessage = response;
+        } else if (typeof response === 'object') {
+            // Pretty-print JSON response and remove unnecessary metadata
+            responseMessage = JSON.stringify(response, null, 2);
         } else {
-            // Generate content using Gemini API
-            const geminiResponse = await generateContent(userMessage);
-            messageBody = geminiResponse || "Sorry, I couldn't generate a response.";
+            responseMessage = "Unexpected response format from Gemini and function execution.";
         }
 
-        // Truncate the message if it exceeds the limit
-        if (messageBody.length > 4096) {
-            messageBody = messageBody.substring(0, 4090) + "...(truncated)";
+
+        if (responseMessage.length > 4096) {
+            responseMessage = responseMessage.substring(0, 4090) + "...(truncated)";
         }
 
         const facebookApiUrl = `https://graph.facebook.com/v18.0/${business_phone_number_id}/messages`;
@@ -401,9 +407,9 @@ app.post("/webhook", async (req, res) => {
             body: JSON.stringify({
                 messaging_product: "whatsapp",
                 to: message.from,
-                text: { body: messageBody },
+                text: { body: responseMessage },
                 context: {
-                    message_id: message.id, // shows the message as a reply to the original user message
+                    message_id: message.id,
                 },
             }),
         });
@@ -412,8 +418,9 @@ app.post("/webhook", async (req, res) => {
             console.error('Error sending message:', facebookResponse.status, await facebookResponse.text());
         }
 
-        const readStatusApiUrl = `https://graph.facebook.com/v18.0/${business_phone_number_id}/messages`;
 
+        // Mark as read
+        const readStatusApiUrl = `https://graph.facebook.com/v18.0/${business_phone_number_id}/messages`;
         const readStatusResponse = await fetch(readStatusApiUrl, {
             method: 'POST',
             headers: {
@@ -449,8 +456,7 @@ app.get("/webhook", (req, res) => {
 });
 
 app.get("/", (req, res) => {
-    res.send(`<pre>Nothing to see here.
-Checkout README.md to start.</pre>`);
+    res.send(`<pre>Nothing to see here. Checkout README.md to start.</pre>`);
 });
 
 app.listen(PORT, () => {
